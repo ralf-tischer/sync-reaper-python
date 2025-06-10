@@ -9,6 +9,18 @@ SUB_FOLDERS = ["FXChains", "Configurations", "KeyMaps", "presets", "ProjectTempl
 COMPARE_PATHS = [{"config": "Notebook Config", "path": "D:/Sound/Reaper Notebook"},
                  {"config": "Main Config", "path": "C:/Users/ralft/AppData/Roaming/REAPER"}]  # Fixed typo here
 
+def print_headline(text):
+    """
+    Print a headline with a specific format.
+
+    Args:
+        text (str): The text to print as a headline.
+    """
+    print("\n" + "=" * 80)
+    print(text)
+    print("=" * 80 + "\n")
+
+
 def get_file_properties(filepath):
     """
     Return file properties for the given file path.
@@ -59,6 +71,8 @@ def compare_and_sync(folders, paths):
         folders (list): List of subfolder names to compare.
         paths (list): List of dicts with 'config' and 'path' keys.
     """
+    any_changes = False
+
     for folder in folders:
         file_versions = {}
         # Collect all files in all paths for this folder
@@ -115,12 +129,16 @@ def compare_and_sync(folders, paths):
                     if resp.lower() == 'y':
                         shutil.copy2(newest_path, old_path)
                         print(f"Replaced {old_path} with {newest_path}")
+    return any_changes
 
 
 if __name__ == "__main__":
     """
     Entry point for the script. Compares and synchronizes files in the specified subfolders and paths.
     """
-    # Example usage:
-    compare_and_sync(SUB_FOLDERS, COMPARE_PATHS)
-    input("\nPress Enter to exit...")
+    print_headline("Reaper Sync Tool: Check for changes in portable and main Reaper configurations")
+    any_changes = compare_and_sync(SUB_FOLDERS, COMPARE_PATHS)
+    if any_changes:
+        input("Press Enter to exit...")
+    else:
+        print("No changes detected.")
