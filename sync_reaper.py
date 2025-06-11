@@ -2,12 +2,27 @@ import os
 import shutil
 from datetime import datetime
 
-SUB_FOLDERS = ["FXChains", "Configurations", "KeyMaps", "presets", "ProjectTemplates", "TrackTemplates", "UserPlugins"]
-#COMAPRE_PATHS = ["D:/Sound/Reaper Notebook", "C:/Users/ralft/AppData/Roaming/REAPER"]
-#COMAPRE_PATHS = [{"config": "A", "path": "test_data/A"},
-#                 {"config": "B", "path": "test_data/B"}]
+SUB_FOLDERS = ["", 
+               "FXChains", 
+               "Configurations", 
+               "KeyMaps", 
+               "presets", 
+               "ProjectTemplates", 
+               "TrackTemplates", 
+               "UserPlugins"]
+
 COMPARE_PATHS = [{"config": "Notebook Config", "path": "D:/Sound/Reaper Notebook"},
                  {"config": "Main Config", "path": "C:/Users/ralft/AppData/Roaming/REAPER"}]  # Fixed typo here
+
+ROOT_FILES = [
+    "reaper-fxfolders.ini",  
+    "reaper-fxtags.ini",
+    "reaper-recentfx.ini",
+    "reaper-screensets.ini",
+    "reaper-themeconfig.ini",
+    "reaper-vkbmap.txt"
+]
+
 
 def print_headline(text):
     """
@@ -80,12 +95,20 @@ def compare_and_sync(folders, paths):
             folder_path = os.path.join(path["path"], folder)
             if not os.path.isdir(folder_path):
                 continue
-            for root, _, files in os.walk(folder_path):
-                for fname in files:
-                    fpath = os.path.join(root, fname)
-                    rel_path = os.path.relpath(fpath, folder_path)
-                    props = get_file_properties(fpath)
-                    file_versions.setdefault(rel_path, []).append((fpath, props))
+            if folder == "":
+                # Only check specific files in root
+                for fname in ROOT_FILES:
+                    fpath = os.path.join(folder_path, fname)
+                    if os.path.isfile(fpath):
+                        props = get_file_properties(fpath)
+                        file_versions.setdefault(fname, []).append((fpath, props))
+            else:
+                for root, _, files in os.walk(folder_path):
+                    for fname in files:
+                        fpath = os.path.join(root, fname)
+                        rel_path = os.path.relpath(fpath, folder_path)
+                        props = get_file_properties(fpath)
+                        file_versions.setdefault(rel_path, []).append((fpath, props))
 
         # Compare versions and prompt if newer found
         for fname, versions in file_versions.items():
@@ -98,6 +121,7 @@ def compare_and_sync(folders, paths):
                     target_path = os.path.join(folder_path, fname)
                     target_config, target_base = find_config_for_path(target_path, folder, paths)
                     if not os.path.exists(target_path):
+                        any_changes = True
                         print(f"\nNew file detected: {fname}")
                         print(f"  [config]: {config} | [path]: {base_path}")
                         print(f"  Size: {only_props['size']} bytes | Modified: {datetime.fromtimestamp(only_props['mtime'])}")
@@ -116,6 +140,7 @@ def compare_and_sync(folders, paths):
             for old_path, old_props in versions[1:]:
                 old_config, old_base = find_config_for_path(old_path, folder, paths)
                 if newest_props['mtime'] > old_props['mtime']:
+                    any_changes = True
                     print(f"\nFile: {fname}")
                     print(f"Newer version:")
                     print(f"  [config]: {newest_config} | [path]: {newest_base}")
