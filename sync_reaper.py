@@ -164,6 +164,6 @@ if __name__ == "__main__":
     print_headline("Reaper Sync Tool: Check for changes in portable and main Reaper configurations")
     any_changes = compare_and_sync(SUB_FOLDERS, COMPARE_PATHS)
     if any_changes:
-        input("Press Enter to exit...")
+        input("\nPress Enter to exit...")
     else:
         print("No changes detected.")
