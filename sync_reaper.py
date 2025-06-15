@@ -15,6 +15,7 @@ COMPARE_PATHS = [{"config": "Notebook Config", "path": "D:/Sound/Reaper Notebook
                  {"config": "Main Config", "path": "C:/Users/ralft/AppData/Roaming/REAPER"}]  # Fixed typo here
 
 ROOT_FILES = [
+    "REAPER.ini",
     "reaper-fxfolders.ini",  
     "reaper-fxtags.ini",
     "reaper-recentfx.ini",
@@ -23,6 +24,7 @@ ROOT_FILES = [
     "reaper-vkbmap.txt"
 ]
 
+REAPER_INI_SECTIONS = ["Recent", "RecentFX"]
 
 def print_headline(text):
     """
@@ -74,96 +76,238 @@ def find_config_for_path(fpath, folder, paths):
             continue
     return None, None
 
-def compare_and_sync(folders, paths):
+def collect_files_in_folder(folder, paths, root_files=None):
     """
-    Compare and synchronize files across multiple folders and paths.
-
-    For each file in the specified subfolders and paths:
-    - If the file exists in only one location, offer to copy it to the others.
-    - If the file exists in multiple locations, compare modification times and offer to update older versions.
-
-    Args:
-        folders (list): List of subfolder names to compare.
-        paths (list): List of dicts with 'config' and 'path' keys.
+    Collect files in the given folder for all paths.
+    If folder is '', only files in root_files are considered.
+    Returns a dict: {relative_path: [(full_path, file_properties), ...]}
     """
-    any_changes = False
+    file_versions = {}
+    for path in paths:
+        folder_path = os.path.join(path["path"], folder)
+        if not os.path.isdir(folder_path):
+            continue
+        if folder == "" and root_files:
+            for fname in root_files:
+                fpath = os.path.join(folder_path, fname)
+                if os.path.isfile(fpath):
+                    props = get_file_properties(fpath)
+                    file_versions.setdefault(fname, []).append((fpath, props))
+        else:
+            for root, _, files in os.walk(folder_path):
+                for fname in files:
+                    fpath = os.path.join(root, fname)
+                    rel_path = os.path.relpath(fpath, folder_path)
+                    props = get_file_properties(fpath)
+                    file_versions.setdefault(rel_path, []).append((fpath, props))
+    return file_versions
 
-    for folder in folders:
-        file_versions = {}
-        # Collect all files in all paths for this folder
+def update_reaper_ini_sections(old_path, newest_path, old_config, newest_config, sections):
+    """
+    Update specified sections in reaper.ini from newest_path to old_path.
+    """
+    from_ini = ReaperIni(newest_path)
+    to_ini = ReaperIni(old_path)
+    for section in sections:
+        print(f"Updating [{section}] section in '{old_config}' from '{newest_config}'...")
+        section_content = from_ini.get_section(section)
+        if section_content:
+            to_ini.overwrite_section(section, section_content)
+            print(f"[{section}] section updated in {old_path}")
+        else:
+            print(f"No [{section}] section found in {newest_path}")
+
+def sync_file_versions(fname, versions, folder, paths, root_files=None, reaper_ini_sections=None):
+    """
+    Handle syncing logic for a single file across all paths.
+    """
+    if len(versions) < 2:
+        # File exists only in one location, offer to copy to others
+        only_path, only_props = versions[0]
+        config, base_path = find_config_for_path(only_path, folder, paths)
         for path in paths:
             folder_path = os.path.join(path["path"], folder)
-            if not os.path.isdir(folder_path):
+            target_path = os.path.join(folder_path, fname)
+            target_config, target_base = find_config_for_path(target_path, folder, paths)
+            if not os.path.exists(target_path):
+                print(f"\nNew file detected: {fname}")
+                print(f"  [config]: {config} | [path]: {base_path}")
+                print(f"  Size: {only_props['size']} bytes | Modified: {datetime.fromtimestamp(only_props['mtime'])}")
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                shutil.copy2(only_path, target_path)
+                print(f"Copied {only_path} to {target_path}")
+        return True
+
+    # Sort by mtime (modification time), descending
+    versions.sort(key=lambda x: x[1]['mtime'], reverse=True)
+    newest_path, newest_props = versions[0]
+    newest_config, newest_base = find_config_for_path(newest_path, folder, paths)
+    any_changes = False
+    for old_path, old_props in versions[1:]:
+        old_config, old_base = find_config_for_path(old_path, folder, paths)
+        if newest_props['mtime'] > old_props['mtime']:
+            print(f"\nFile: {fname}")
+            print(f"Newer version:")
+            print(f"  [config]: {newest_config} | [path]: {newest_base}")
+            print(f"  Size: {newest_props['size']} bytes | Modified: {datetime.fromtimestamp(newest_props['mtime'])}")
+            print(f"Older version:")
+            print(f"  [config]: {old_config} | [path]: {old_base}")
+            print(f"  Size: {old_props['size']} bytes | Modified: {datetime.fromtimestamp(old_props['mtime'])}")
+            if fname == "reaper.ini" and folder == "" and reaper_ini_sections:
+                update_reaper_ini_sections(old_path, newest_path, old_config, newest_config, reaper_ini_sections)
+                any_changes = True
                 continue
-            if folder == "":
-                # Only check specific files in root
-                for fname in ROOT_FILES:
-                    fpath = os.path.join(folder_path, fname)
-                    if os.path.isfile(fpath):
-                        props = get_file_properties(fpath)
-                        file_versions.setdefault(fname, []).append((fpath, props))
-            else:
-                for root, _, files in os.walk(folder_path):
-                    for fname in files:
-                        fpath = os.path.join(root, fname)
-                        rel_path = os.path.relpath(fpath, folder_path)
-                        props = get_file_properties(fpath)
-                        file_versions.setdefault(rel_path, []).append((fpath, props))
-
-        # Compare versions and prompt if newer found
-        for fname, versions in file_versions.items():
-            if len(versions) < 2:
-                # File exists only in one location, offer to copy to others
-                only_path, only_props = versions[0]
-                config, base_path = find_config_for_path(only_path, folder, paths)
-                for path in paths:
-                    folder_path = os.path.join(path["path"], folder)
-                    target_path = os.path.join(folder_path, fname)
-                    target_config, target_base = find_config_for_path(target_path, folder, paths)
-                    if not os.path.exists(target_path):
-                        any_changes = True
-                        print(f"\nNew file detected: {fname}")
-                        print(f"  [config]: {config} | [path]: {base_path}")
-                        print(f"  Size: {only_props['size']} bytes | Modified: {datetime.fromtimestamp(only_props['mtime'])}")
-                        resp = input(f"Copy new file '{fname}' to '{target_config}'? (y/n): ")
-                        if resp.lower() == 'y':
-                            os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                            shutil.copy2(only_path, target_path)
-                            print(f"Copied {only_path} to {target_path}")
-
-                continue  # Skip further comparison
-
-            # Sort by mtime (modification time), descending
-            versions.sort(key=lambda x: x[1]['mtime'], reverse=True)
-            newest_path, newest_props = versions[0]
-            newest_config, newest_base = find_config_for_path(newest_path, folder, paths)
-            for old_path, old_props in versions[1:]:
-                old_config, old_base = find_config_for_path(old_path, folder, paths)
-                if newest_props['mtime'] > old_props['mtime']:
-                    any_changes = True
-                    print(f"\nFile: {fname}")
-                    print(f"Newer version:")
-                    print(f"  [config]: {newest_config} | [path]: {newest_base}")
-                    print(f"  Size: {newest_props['size']} bytes | Modified: {datetime.fromtimestamp(newest_props['mtime'])}")
-
-                    print(f"Older version:")
-                    print(f"  [config]: {old_config} | [path]: {old_base}")
-                    print(f"  Size: {old_props['size']} bytes | Modified: {datetime.fromtimestamp(old_props['mtime'])}")
-
-                    resp = input(f"Replace older file '{fname}' in '{old_config}' with newer file from '{newest_config}'? (y/n): ")
-                    if resp.lower() == 'y':
-                        shutil.copy2(newest_path, old_path)
-                        print(f"Replaced {old_path} with {newest_path}")
+            resp = input(f"Replace older file '{fname}' in '{old_config}' with newer file from '{newest_config}'? (y/n): ")
+            if resp.lower() == 'y':
+                shutil.copy2(newest_path, old_path)
+                print(f"Replaced {old_path} with {newest_path}")
+                any_changes = True
     return any_changes
 
+def auto_update_root_files(paths, root_files):
+    """
+    Automatically update root files (except reaper.ini) without user confirmation.
+    Only replace if file properties (size or mtime) differ.
+    """
+    for fname in root_files:
+        if fname.lower() == "reaper.ini":
+            continue  # Handled separately
+        file_versions = collect_files_in_folder("", paths, root_files=[fname])
+        for _, versions in file_versions.items():
+            if len(versions) < 2:
+                only_path, only_props = versions[0]
+                for path in paths:
+                    target_path = os.path.join(path["path"], fname)
+                    if not os.path.exists(target_path):
+                        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                        shutil.copy2(only_path, target_path)
+                        print(f"[AUTO] Copied {only_path} to {target_path}")
+            else:
+                versions.sort(key=lambda x: x[1]['mtime'], reverse=True)
+                newest_path, newest_props = versions[0]
+                for old_path, old_props in versions[1:]:
+                    if os.path.abspath(newest_path) != os.path.abspath(old_path):
+                        # Only replace if file properties differ
+                        if (newest_props['size'] != old_props['size'] or
+                            newest_props['mtime'] != old_props['mtime']):
+                            shutil.copy2(newest_path, old_path)
+                            print(f"[AUTO] Updated {old_path} with {newest_path}")
+
+def auto_update_reaper_ini_sections(paths, sections):
+    """
+    Automatically update specified sections in reaper.ini without user confirmation.
+    """
+    file_versions = collect_files_in_folder("", paths, root_files=["reaper.ini"])
+    for fname, versions in file_versions.items():
+        if len(versions) < 2:
+            continue
+        versions.sort(key=lambda x: x[1]['mtime'], reverse=True)
+        newest_path, _ = versions[0]
+        for old_path, _ in versions[1:]:
+            if os.path.abspath(newest_path) != os.path.abspath(old_path):
+                update_reaper_ini_sections(old_path, newest_path, "", "", sections)
+
+def compare_and_sync_with_confirmation(folders, paths, root_files=None, reaper_ini_sections=None):
+    """
+    For all folders except root, compare and sync files with user confirmation.
+    """
+    any_changes = False
+    for folder in folders:
+        if folder == "":
+            continue  # Root handled separately
+        file_versions = collect_files_in_folder(folder, paths, root_files=root_files)
+        for fname, versions in file_versions.items():
+            changed = sync_file_versions(
+                fname, versions, folder, paths,
+                root_files=root_files,
+                reaper_ini_sections=reaper_ini_sections
+            )
+            if changed:
+                any_changes = True
+    return any_changes
+
+class ReaperIni:
+    """
+    Class to read and modify sections in a .ini file (such as reaper.ini).
+    """
+    def __init__(self, filepath):
+        self.filepath = filepath
+        with open(filepath, 'r', encoding='utf-8') as f:
+            self.lines = f.readlines()
+
+    def get_section(self, section_name):
+        """
+        Return the content of a section (including the [section] header) as a string.
+        Returns an empty string if not found.
+        """
+        start_idx = None
+        end_idx = None
+        section_lines = []
+        in_section = False
+        for idx, line in enumerate(self.lines):
+            if line.strip().lower() == f'[{section_name.lower()}]':
+                start_idx = idx
+                in_section = True
+                section_lines = [line]
+                continue
+            if in_section:
+                if line.startswith('[') and line.strip().lower() != f'[{section_name.lower()}]':
+                    end_idx = idx
+                    break
+                section_lines.append(line)
+        if in_section and end_idx is None:
+            end_idx = len(self.lines)
+        if start_idx is not None:
+            return ''.join(section_lines)
+        return ''
+
+    def overwrite_section(self, section_name, content):
+        """
+        Overwrite the given section with the provided content (string, including [section] header).
+        If the section does not exist, append it at the end.
+        """
+        start_idx = None
+        end_idx = None
+        in_section = False
+        for idx, line in enumerate(self.lines):
+            if line.strip().lower() == f'[{section_name.lower()}]':
+                start_idx = idx
+                in_section = True
+                continue
+            if in_section:
+                if line.startswith('[') and line.strip().lower() != f'[{section_name.lower()}]':
+                    end_idx = idx
+                    break
+        if in_section and end_idx is None:
+            end_idx = len(self.lines)
+        content_lines = content if isinstance(content, list) else content.splitlines(keepends=True)
+        if start_idx is not None:
+            self.lines = self.lines[:start_idx] + content_lines + self.lines[end_idx:]
+        else:
+            # Append at end
+            if not self.lines or self.lines[-1].endswith('\n'):
+                self.lines += content_lines
+            else:
+                self.lines.append('\n')
+                self.lines += content_lines
+        #'''
+        # Write changes back to file
+        with open(self.filepath, 'w', encoding='utf-8') as f:
+            f.writelines(self.lines)
+        #'''
+        #print(f"Section '{section_name}' overwritten in {self.filepath}")
+        #print(f"New content:\n{content.strip()}\n")
 
 if __name__ == "__main__":
     """
     Entry point for the script. Compares and synchronizes files in the specified subfolders and paths.
     """
     print_headline("Reaper Sync Tool: Check for changes in portable and main Reaper configurations")
-    any_changes = compare_and_sync(SUB_FOLDERS, COMPARE_PATHS)
+    auto_update_root_files(COMPARE_PATHS, ROOT_FILES)
+    auto_update_reaper_ini_sections(COMPARE_PATHS, REAPER_INI_SECTIONS)
+    any_changes = compare_and_sync_with_confirmation(SUB_FOLDERS, COMPARE_PATHS, root_files=ROOT_FILES, reaper_ini_sections=REAPER_INI_SECTIONS)
     if any_changes:
         input("\nPress Enter to exit...")
     else:
         print("No changes detected.")
+        input("\nPress Enter to exit...")
