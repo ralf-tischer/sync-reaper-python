@@ -1,6 +1,7 @@
 import os
 import shutil
 from datetime import datetime
+import sys
 
 SUB_FOLDERS = ["", 
                "FXChains", 
@@ -26,16 +27,20 @@ ROOT_FILES = [
 
 REAPER_INI_SECTIONS = ["Recent", "RecentFX"]
 LOG_FILEPATH = "sync_reaper.log"
+VERBOSE = False
+if any(arg in ("-v", "--verbose") for arg in sys.argv):
+    VERBOSE = True
 
 def log_print(*args, **kwargs):
     """
-    Print to console and append to log file, with date and time.
+    Print to console (if VERBOSE) and append to log file, with date and time.
     """
     from datetime import datetime
     msg = " ".join(str(a) for a in args)
     timestamp = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
     log_line = f"{timestamp} {msg}"
-    print(log_line, **kwargs)
+    if VERBOSE:
+        print(log_line, **kwargs)
     with open(LOG_FILEPATH, "a", encoding="utf-8") as f:
         f.write(log_line + "\n")
 
@@ -320,7 +325,6 @@ if __name__ == "__main__":
     auto_update_reaper_ini_sections(COMPARE_PATHS, REAPER_INI_SECTIONS)
     any_changes = compare_and_sync_with_confirmation(SUB_FOLDERS, COMPARE_PATHS, root_files=ROOT_FILES, reaper_ini_sections=REAPER_INI_SECTIONS)
     if any_changes:
-        input("\nPress Enter to exit...")
+        if VERBOSE: input("\nPress Enter to exit...")
     else:
         log_print("No changes detected.")
-        input("\nPress Enter to exit...")
