@@ -25,6 +25,19 @@ ROOT_FILES = [
 ]
 
 REAPER_INI_SECTIONS = ["Recent", "RecentFX"]
+LOG_FILEPATH = "sync_reaper.log"
+
+def log_print(*args, **kwargs):
+    """
+    Print to console and append to log file, with date and time.
+    """
+    from datetime import datetime
+    msg = " ".join(str(a) for a in args)
+    timestamp = datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
+    log_line = f"{timestamp} {msg}"
+    print(log_line, **kwargs)
+    with open(LOG_FILEPATH, "a", encoding="utf-8") as f:
+        f.write(log_line + "\n")
 
 def print_headline(text):
     """
@@ -33,9 +46,9 @@ def print_headline(text):
     Args:
         text (str): The text to print as a headline.
     """
-    print("\n" + "=" * 80)
-    print(text)
-    print("=" * 80 + "\n")
+    log_print("\n" + "=" * 80)
+    log_print(text)
+    log_print("=" * 80 + "\n")
 
 
 def get_file_properties(filepath):
@@ -109,13 +122,13 @@ def update_reaper_ini_sections(old_path, newest_path, old_config, newest_config,
     from_ini = ReaperIni(newest_path)
     to_ini = ReaperIni(old_path)
     for section in sections:
-        print(f"Updating [{section}] section in '{old_config}' from '{newest_config}'...")
+        log_print(f"Updating [{section}] section in '{old_config}' from '{newest_config}'...")
         section_content = from_ini.get_section(section)
         if section_content:
             to_ini.overwrite_section(section, section_content)
-            print(f"[{section}] section updated in {old_path}")
+            log_print(f"[{section}] section updated in {old_path}")
         else:
-            print(f"No [{section}] section found in {newest_path}")
+            log_print(f"No [{section}] section found in {newest_path}")
 
 def sync_file_versions(fname, versions, folder, paths, root_files=None, reaper_ini_sections=None):
     """
@@ -130,12 +143,12 @@ def sync_file_versions(fname, versions, folder, paths, root_files=None, reaper_i
             target_path = os.path.join(folder_path, fname)
             target_config, target_base = find_config_for_path(target_path, folder, paths)
             if not os.path.exists(target_path):
-                print(f"\nNew file detected: {fname}")
-                print(f"  [config]: {config} | [path]: {base_path}")
-                print(f"  Size: {only_props['size']} bytes | Modified: {datetime.fromtimestamp(only_props['mtime'])}")
+                log_print(f"\nNew file detected: {fname}")
+                log_print(f"  [config]: {config} | [path]: {base_path}")
+                log_print(f"  Size: {only_props['size']} bytes | Modified: {datetime.fromtimestamp(only_props['mtime'])}")
                 os.makedirs(os.path.dirname(target_path), exist_ok=True)
                 shutil.copy2(only_path, target_path)
-                print(f"Copied {only_path} to {target_path}")
+                log_print(f"Copied {only_path} to {target_path}")
         return True
 
     # Sort by mtime (modification time), descending
@@ -146,13 +159,13 @@ def sync_file_versions(fname, versions, folder, paths, root_files=None, reaper_i
     for old_path, old_props in versions[1:]:
         old_config, old_base = find_config_for_path(old_path, folder, paths)
         if newest_props['mtime'] > old_props['mtime']:
-            print(f"\nFile: {fname}")
-            print(f"Newer version:")
-            print(f"  [config]: {newest_config} | [path]: {newest_base}")
-            print(f"  Size: {newest_props['size']} bytes | Modified: {datetime.fromtimestamp(newest_props['mtime'])}")
-            print(f"Older version:")
-            print(f"  [config]: {old_config} | [path]: {old_base}")
-            print(f"  Size: {old_props['size']} bytes | Modified: {datetime.fromtimestamp(old_props['mtime'])}")
+            log_print(f"\nFile: {fname}")
+            log_print(f"Newer version:")
+            log_print(f"  [config]: {newest_config} | [path]: {newest_base}")
+            log_print(f"  Size: {newest_props['size']} bytes | Modified: {datetime.fromtimestamp(newest_props['mtime'])}")
+            log_print(f"Older version:")
+            log_print(f"  [config]: {old_config} | [path]: {old_base}")
+            log_print(f"  Size: {old_props['size']} bytes | Modified: {datetime.fromtimestamp(old_props['mtime'])}")
             if fname == "reaper.ini" and folder == "" and reaper_ini_sections:
                 update_reaper_ini_sections(old_path, newest_path, old_config, newest_config, reaper_ini_sections)
                 any_changes = True
@@ -160,7 +173,7 @@ def sync_file_versions(fname, versions, folder, paths, root_files=None, reaper_i
             resp = input(f"Replace older file '{fname}' in '{old_config}' with newer file from '{newest_config}'? (y/n): ")
             if resp.lower() == 'y':
                 shutil.copy2(newest_path, old_path)
-                print(f"Replaced {old_path} with {newest_path}")
+                log_print(f"Replaced {old_path} with {newest_path}")
                 any_changes = True
     return any_changes
 
@@ -181,7 +194,7 @@ def auto_update_root_files(paths, root_files):
                     if not os.path.exists(target_path):
                         os.makedirs(os.path.dirname(target_path), exist_ok=True)
                         shutil.copy2(only_path, target_path)
-                        print(f"[AUTO] Copied {only_path} to {target_path}")
+                        log_print(f"[AUTO] Copied {only_path} to {target_path}")
             else:
                 versions.sort(key=lambda x: x[1]['mtime'], reverse=True)
                 newest_path, newest_props = versions[0]
@@ -191,7 +204,7 @@ def auto_update_root_files(paths, root_files):
                         if (newest_props['size'] != old_props['size'] or
                             newest_props['mtime'] != old_props['mtime']):
                             shutil.copy2(newest_path, old_path)
-                            print(f"[AUTO] Updated {old_path} with {newest_path}")
+                            log_print(f"[AUTO] Updated {old_path} with {newest_path}")
 
 def auto_update_reaper_ini_sections(paths, sections):
     """
@@ -309,5 +322,5 @@ if __name__ == "__main__":
     if any_changes:
         input("\nPress Enter to exit...")
     else:
-        print("No changes detected.")
+        log_print("No changes detected.")
         input("\nPress Enter to exit...")
