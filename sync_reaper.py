@@ -28,6 +28,7 @@ ROOT_FILES = [
 REAPER_INI_SECTIONS = ["Recent", "RecentFX"]
 LOG_FILEPATH = "sync_reaper.log"
 VERBOSE = False
+TEST_MODE = any(arg in ("--test", "-t") for arg in sys.argv)
 if any(arg in ("-v", "--verbose") for arg in sys.argv):
     VERBOSE = True
 
@@ -120,27 +121,23 @@ def collect_files_in_folder(folder, paths, root_files=None):
                     file_versions.setdefault(rel_path, []).append((fpath, props))
     return file_versions
 
-def update_reaper_ini_sections(old_path, newest_path, old_config, newest_config, sections):
-    """
-    Update specified sections in reaper.ini from newest_path to old_path.
-    """
-    from_ini = ReaperIni(newest_path)
-    to_ini = ReaperIni(old_path)
-    for section in sections:
-        log_print(f"Updating [{section}] section in '{old_config}' from '{newest_config}'...")
-        section_content = from_ini.get_section(section)
-        if section_content:
-            to_ini.overwrite_section(section, section_content)
-            log_print(f"[{section}] section updated in {old_path}")
-        else:
-            log_print(f"No [{section}] section found in {newest_path}")
+def log_or_write(action, src, dst):
+    if TEST_MODE:
+        log_print(f"[TEST MODE] Would {action}: {src} -> {dst}")
+    else:
+        if action == "copy":
+            shutil.copy2(src, dst)
+        elif action == "update":
+            shutil.copy2(src, dst)
+        log_print(f"{action.capitalize()}d {src} to {dst}")
 
 def sync_file_versions(fname, versions, folder, paths, root_files=None, reaper_ini_sections=None):
     """
     Handle syncing logic for a single file across all paths.
+    Only prompt user if versions differ in modification date or size.
     """
+    # If only one version exists, handle new file copy
     if len(versions) < 2:
-        # File exists only in one location, offer to copy to others
         only_path, only_props = versions[0]
         config, base_path = find_config_for_path(only_path, folder, paths)
         for path in paths:
@@ -151,36 +148,53 @@ def sync_file_versions(fname, versions, folder, paths, root_files=None, reaper_i
                 log_print(f"\nNew file detected: {fname}")
                 log_print(f"  [config]: {config} | [path]: {base_path}")
                 log_print(f"  Size: {only_props['size']} bytes | Modified: {datetime.fromtimestamp(only_props['mtime'])}")
-                os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                shutil.copy2(only_path, target_path)
-                log_print(f"Copied {only_path} to {target_path}")
+                resp = input(f"Copy new file '{fname}' to '{target_config}'? (y/n): ")
+                log_print(f"User response for copying new file '{fname}' to '{target_config}': {resp}")
+                if resp.lower() == 'y':
+                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                    log_or_write("copy", only_path, target_path)
         return True
-
-    # Sort by mtime (modification time), descending
+    # If all versions have the same modification date AND size, skip prompt and do not log
+    mtimes = set([props['mtime'] for _, props in versions])
+    sizes = set([props['size'] for _, props in versions])
+    if len(mtimes) == 1 and len(sizes) == 1:
+        return False
+    # Multiple versions found, ask user which to keep
     versions.sort(key=lambda x: x[1]['mtime'], reverse=True)
-    newest_path, newest_props = versions[0]
-    newest_config, newest_base = find_config_for_path(newest_path, folder, paths)
-    any_changes = False
-    for old_path, old_props in versions[1:]:
-        old_config, old_base = find_config_for_path(old_path, folder, paths)
-        if newest_props['mtime'] > old_props['mtime']:
-            log_print(f"\nFile: {fname}")
-            log_print(f"Newer version:")
-            log_print(f"  [config]: {newest_config} | [path]: {newest_base}")
-            log_print(f"  Size: {newest_props['size']} bytes | Modified: {datetime.fromtimestamp(newest_props['mtime'])}")
-            log_print(f"Older version:")
-            log_print(f"  [config]: {old_config} | [path]: {old_base}")
-            log_print(f"  Size: {old_props['size']} bytes | Modified: {datetime.fromtimestamp(old_props['mtime'])}")
-            if fname == "reaper.ini" and folder == "" and reaper_ini_sections:
-                update_reaper_ini_sections(old_path, newest_path, old_config, newest_config, reaper_ini_sections)
-                any_changes = True
-                continue
-            resp = input(f"Replace older file '{fname}' in '{old_config}' with newer file from '{newest_config}'? (y/n): ")
-            if resp.lower() == 'y':
-                shutil.copy2(newest_path, old_path)
-                log_print(f"Replaced {old_path} with {newest_path}")
-                any_changes = True
-    return any_changes
+    log_print(f"\nMultiple versions found for file: {fname}")
+    for idx, (path, props) in enumerate(versions):
+        config, base_path = find_config_for_path(path, folder, paths)
+        log_print(f"[{idx+1}] {path} | [config]: {config} | [path]: {base_path} | Size: {props['size']} | Modified: {datetime.fromtimestamp(props['mtime'])}")
+    choice = input(f"Which version of '{fname}' do you want to keep? Enter number (1-{len(versions)}): ")
+    log_print(f"User chose version {choice} for file '{fname}'")
+    try:
+        keep_idx = int(choice) - 1
+        keep_path, keep_props = versions[keep_idx]
+        for idx, (path, _) in enumerate(versions):
+            if idx != keep_idx:
+                log_or_write("update", keep_path, path)
+        return True
+    except Exception as e:
+        log_print(f"Invalid choice or error: {e}")
+        return False
+
+def update_reaper_ini_sections(old_path, newest_path, old_config, newest_config, sections):
+    """
+    Update specified sections in reaper.ini from newest_path to old_path.
+    """
+    from_ini = ReaperIni(newest_path)
+    to_ini = ReaperIni(old_path)
+    for section in sections:
+        log_print(f"Updating [{section}] section in '{old_config}' from '{newest_config}'...")
+        section_content = from_ini.get_section(section)
+        if section_content:
+            if TEST_MODE:
+                log_print(f"[TEST MODE] Would update [{section}] section in {old_path} from {newest_path}")
+            else:
+                to_ini.overwrite_section(section, section_content)
+            log_print(f"[{section}] section updated in {old_path}")
+        else:
+            log_print(f"No [{section}] section found in {newest_path}")
 
 def auto_update_root_files(paths, root_files):
     """
